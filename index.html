@@ -420,6 +420,8 @@ footer{border-top:1px solid var(--line);padding-block:28px 44px;color:var(--mute
 @media (prefers-reduced-motion:reduce){.note-body:not([hidden]){animation:none}.chev{transition:none}}
 </style>
 <style>body{margin:0} img{max-width:100%} [hidden]{display:none!important}</style>
+<script>window.goatcounter = {path: () => location.pathname};   // count shared plan links as the home page</script>
+<script data-goatcounter="https://daysortednyc.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
 </head>
 <body>
 <div class="sign">
@@ -2775,6 +2777,11 @@ const COST = ["Free","$","$$","$$$","$$$$"];
 const MAXC = {low:1,mid:3,high:4};
 const BADGE = {t:["bt","Tourist favorite"],l:["bl","Local pick"],b:["bb","Loved by both"]};
 const $ = id => document.getElementById(id);
+// Visitor stats (GoatCounter, no cookies). Does nothing where the counter isn't loaded.
+const track = (name, title, n = 0) => { try { const gc = window.goatcounter;
+  if (gc && gc.count) gc.count({path:name, title:title||name, event:true});
+  else if (gc && n < 8) setTimeout(() => track(name, title, n+1), 750);   // counter still loading
+} catch(e){} };
 
 // Little line drawings for each area choice
 const ICON_PATHS = {
@@ -2917,7 +2924,8 @@ function finishStep(){
   if (step === lastWhere) commitAreas();
   if (done) { plan(); renderStep(); $("result").scrollIntoView({behavior:"smooth",block:"start"}); }
   else if (step < ST.length-1) { step++; renderStep(); }
-  else { done = true; plan(); renderStep(); $("result").scrollIntoView({behavior:"smooth",block:"start"}); }
+  else { done = true; plan(); renderStep(); $("result").scrollIntoView({behavior:"smooth",block:"start"});
+    track("plan-made"); ["who","vibe","budget","style"].forEach(k => track(k+"/"+state[k])); state.picks.forEach(p => track("area/"+p)); if (rainy) track("plan-rainy"); }
 }
 function choose(v){
   const s = steps()[step];
@@ -3415,6 +3423,7 @@ $("reqForm").addEventListener("submit", async e => {
   try {
     const res = await fetch("/", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams(new FormData(f)).toString()});
     if (!res.ok) throw new Error(res.status);
+    track("request-sent");
     f.innerHTML = `<div class="note-head" style="padding:18px 20px"><span class="note-title">Your request</span></div>
       <div class="sent"><h3>Request sent</h3><p>Thanks, ${name.value.trim().split(" ")[0].replace(/[<>&"]/g,"")}! We'll email your custom plan within 48 hours.</p></div>`;
   } catch (err) {
@@ -3441,11 +3450,14 @@ $("picks").addEventListener("click", e => {
 const startOver = () => {
   step = 0; done = false; setURL(pageURL()); draftB = []; draftS = {}; $("result").hidden = true; renderStep(); $("planner").scrollIntoView({behavior:"smooth",block:"start"});
 };
-$("restart").addEventListener("click", startOver);
-$("reset").addEventListener("click", startOver);
-$("shuffle").addEventListener("click", () => { state.seed++; state.swaps = {}; plan(); });
+$("restart").addEventListener("click", () => { track("start-over"); startOver(); });
+$("reset").addEventListener("click", () => { track("start-over"); startOver(); });
+$("shuffle").addEventListener("click", () => { track("shuffle"); state.seed++; state.swaps = {}; plan(); });
 $("stops").addEventListener("click", e => {
+  const a = e.target.closest("a.link");
+  if (a) { const n = (a.closest("li")?.querySelector("h3")?.textContent)||""; track(a.classList.contains("yelp") ? "tap/yelp" : a.classList.contains("book") ? "tap/book" : /Directions/.test(a.textContent) ? "tap/directions" : "tap/maps", n); return; }
   const b = e.target.closest(".swap"); if (!b) return;
+  track("swap/"+b.dataset.slot);
   const s = b.dataset.slot, gaps = () => missing.length + cut.length, before = gaps();
   for (let k = 0; k < 15; k++) { state.swaps[s] = (state.swaps[s]||0) + 1; plan(); if (gaps() <= before) break; }   // skip picks that would leave another slot empty
 });
@@ -3454,16 +3466,18 @@ function copy(text, okId, fallbackEl){
   navigator.clipboard.writeText(text).then(()=>{ const o=$(okId); o.hidden=false; setTimeout(()=>o.hidden=true,2200); })
     .catch(()=>{ if(fallbackEl){ fallbackEl.focus(); fallbackEl.select(); } });
 }
-$("copyPlan").addEventListener("click", () => copy(planText(),"copied"));
-$("planDate").addEventListener("change", e => { if (!validDate(e.target.value)) { e.target.value = state.date; return; } state.date = e.target.value; state.swaps = {}; plan(); });
+$("copyPlan").addEventListener("click", () => { track("copy-plan"); copy(planText(),"copied"); });
+$("planDate").addEventListener("change", e => { if (!validDate(e.target.value)) { e.target.value = state.date; return; } state.date = e.target.value; state.swaps = {}; track("date-changed"); plan(); });
 $("dayMap").addEventListener("click", e => {
   const m = e.target.closest(".mk"); if (!m) return;
   const li = $("stop-"+m.dataset.i); if (!li) return;
   li.scrollIntoView({behavior:"smooth", block:"center"}); li.classList.add("flash"); setTimeout(() => li.classList.remove("flash"), 1400);
 });
 let mapW = 0; window.addEventListener("resize", () => { const w = $("dayMap").clientWidth; if (w !== mapW) { mapW = w; drawMap(); } });
-$("calPlan").addEventListener("click", downloadICS);
+$("calPlan").addEventListener("click", () => { track("add-to-calendar"); downloadICS(); });
+$("routeLink").addEventListener("click", () => track("tap/route-map"));
 $("sharePlan").addEventListener("click", () => {
+  track("share-plan");
   const url = planURL();
   if (navigator.share) navigator.share({title:"My day in NYC · Day Sorted NYC", text:$("planTitle").textContent+" · "+areaNames(), url}).catch(()=>{});
   else copy(url,"linkCopied");
@@ -3471,6 +3485,7 @@ $("sharePlan").addEventListener("click", () => {
 const fromLink = loadFromURL();
 renderStep();
 plan();
+if (fromLink) track("opened-shared-plan");
 if (fromLink) setTimeout(() => $("result").scrollIntoView({block:"start"}), 50);
 </script>
 </body>
