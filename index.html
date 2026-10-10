@@ -1831,6 +1831,8 @@ const clock = m => { m = ((m%1440)+1440)%1440; let h = Math.floor(m/60), mm = m%
 const fmt = m => { const c = clock(m); return c.t+" "+c.ap; };
 const dur = m => m<60 ? `${m} min` : (m%60 ? `${Math.floor(m/60)} hr ${m%60} min` : `${m/60} hr${m>60?"s":""}`);
 // Lay the chosen stops out on a real clock
+const CHECKIN = 15;   // workout classes: get there this many minutes early to check in
+const isClass = p => (" "+p.t+" ").includes(" class ");
 function schedule(stops){
   let t = (state.vibe==="chill" ? 600 : 570) - (stops[0] && stops[0].slot==="coffee" ? 30 : 0);  // coffee at 9:00 (9:30 chill), activities from 9:30
   const earliest = {lunch:705, snack:Math.min(Math.max(870, SUNSET-100), 990), sunset:SUNSET-40, dinner:Math.max(1080, SUNSET+15), night:1230};
@@ -1843,19 +1845,21 @@ function schedule(stops){
     let start = Math.max(arrive, r5(earliest[x.slot]||0), hrs && hrs[1]!=null ? hrs[1] : 0);   // never before it opens
     let missed = false;
     if (show) { const at = show.find(s => s >= arrive); if (at==null) missed = true; else start = at; }   // shows start at curtain time
+    const cls = isClass(x.p);
+    if (cls) start = Math.ceil(Math.max(start, arrive + CHECKIN)/30)*30;   // classes start on the hour or half hour, with time to check in
     const nxt = stops[i+1], nshow = nxt && nxt.slot==="night" && showTimes(nxt.p);
     if (x.slot==="dinner" && nshow) {   // pre-theater dinner: eat early enough to make the curtain
       const at = nshow.find(s => s >= 1080) ?? nshow[nshow.length-1];
       start = Math.max(arrive, 1005, r5(at - 10 - travel(x.p, nxt.p).min - 75));
     }
-    let free = start - arrive;
+    let free = start - (cls ? CHECKIN : 0) - arrive;
     if (free > 0 && i > 0) { const ph = HOURS[out[i-1].p.n], room = ph && ph[2]!=null ? Math.max(0, ph[2] - (out[i-1].start + out[i-1].stay)) : 1e9; const add = (SPOT[out[i-1].p.n]||{}).d ? 0 : Math.min(free, LINGER[out[i-1].slot]||20, room); out[i-1].stay += add; free -= add; }  // linger at the last stop first
     let stay = show ? SHOWS[x.p.n][1] : (SPOT[x.p.n]||{}).d || (x.slot==="lunch" && state.vibe==="foodie" ? 75 : STAY[x.slot]);
     if (x.slot==="dinner" && nshow) stay = 75;
     if (hrs && hrs[2]!=null && start + stay > hrs[2]) stay = Math.max(30, Math.floor((hrs[2] - start)/5)*5);   // leave by closing time
     t = start + stay;
-    const label = x.slot==="sunset" && (start > SUNSET || (rainy && !isOutdoor(x.p))) ? "Evening" : x.slot==="night" && show ? "Show" : x.slot==="dinner" && nshow ? "Pre-show dinner" : x.label;
-    out.push({...x, go, start, stay, free, label, missed});
+    const label = x.slot==="sunset" && (start > SUNSET || (rainy && !isOutdoor(x.p))) ? "Evening" : x.slot==="night" && show ? "Show" : cls ? "Class" : x.slot==="dinner" && nshow ? "Pre-show dinner" : x.label;
+    out.push({...x, go, start, stay, free, label, missed, checkin: cls ? start - CHECKIN : null});
   });
   return out;
 }
@@ -3307,9 +3311,9 @@ function buildICS(){
   current.forEach((x,i) => {
     const next = current[i+1], go = next && next.go;
     const travel = !go ? "" : "\n\nNext: " + (go.mode==="walk" ? `walk ${go.min} min` : go.mode==="ferry" ? `Staten Island Ferry, then ${go.train} (about ${dur(r5(go.min))})` : go.mode==="car" ? `bus or ride-share (about ${dur(r5(go.min))})` : `take the ${go.train} (about ${dur(r5(go.min))})`) + ` to ${next.p.n}.`;
-    const desc = `${x.label} · ${COST[x.p.c]}\n${x.p.w}\nTip: ${x.p.tip}${travel}\n\nYour plan: ${link}`;
+    const desc = `${x.label} · ${COST[x.p.c]}${x.checkin!=null ? `\nClass starts at ${fmt(x.start)}. Get there by ${fmt(x.checkin)} to check in.` : ""}\n${x.p.w}\nTip: ${x.p.tip}${travel}\n\nYour plan: ${link}`;
     L.push("BEGIN:VEVENT", `UID:${d.replace(/-/g,"")}-${i}-${Math.abs([...x.p.n].reduce((h,c)=>h*31+c.charCodeAt(0)|0,7))}@daysortednyc`, "DTSTAMP:"+now,
-      `DTSTART;TZID=America/New_York:${icsTime(d, x.start)}`, `DTEND;TZID=America/New_York:${icsTime(d, x.start + x.stay)}`,
+      `DTSTART;TZID=America/New_York:${icsTime(d, x.checkin ?? x.start)}`, `DTEND;TZID=America/New_York:${icsTime(d, x.start + x.stay)}`,
       "SUMMARY:"+icsEsc(`${i+1}. ${x.p.n}`), "LOCATION:"+icsEsc(mapQuery(x.p)), "DESCRIPTION:"+icsEsc(desc), "END:VEVENT");
   });
   L.push("END:VCALENDAR");
@@ -3359,7 +3363,7 @@ function render(){
     + (WX[state.date] ? ` · Forecast: high of ${WX[state.date].hi}°F, ${WX[state.date].rain}% chance of rain` + (rainy ? ". Rain is likely, so we picked indoor spots where we could." : "") : "")
     + (cut.length ? ` · We left off the ${listJoin(cut)} so the day doesn't run too late. Fewer areas means less travel.` : travelMin > 180 ? ` · That's a lot of travel. Fewer areas means more time at each stop.` : "")
     + (missing.length ? ` · We skipped the ${listJoin(missing)} ${missing.length>1?"stops":"stop"} because ${state.picks.length>1?"these areas don't":"this area doesn't"} have a good match yet. Add a nearby neighborhood for a fuller day.` : "");
-  $("stops").innerHTML = current.map(({start,stay,go,free,label,slot,p,options}, idx) => { const z = zone(p), c = clock(start);
+  $("stops").innerHTML = current.map(({start,stay,go,free,label,slot,p,options,checkin}, idx) => { const z = zone(p), c = clock(start);
     const goRow = !go ? "" : `
     <li class="travel">
       <div class="time"></div><div class="dotw"><span class="tdot"></span></div>
@@ -3378,6 +3382,7 @@ function render(){
         <div class="meta"><span>${p.h}${(()=>{ const sk = subOf(p), on = state.picks.some(t=>matches(p,t)), nm = sk ? SUB[sk].n : BORO[boroOf(p)].n;
           return (state.picks.length>1 || BORO[state.picks[0]] || !on) && nm!==p.h ? " · "+nm : ""; })()}${!state.picks.some(t=>matches(p,t))?" (short trip)":""}</span><span class="cost">${COST[p.c]}</span><span>about ${dur(stay)}</span></div>
         <p>${p.w}</p>
+        ${checkin!=null ? `<p class="tip"><b>Check in:</b> Get there by ${fmt(checkin)}, 15 minutes before class starts.</p>` : ""}
         <p class="tip"><b>Tip:</b> ${p.tip}</p>
         <div class="acts">
           <button class="swap" type="button" data-slot="${slot}" ${options<2?"disabled":""}>Swap</button>
@@ -3397,7 +3402,7 @@ function planText(){
   return [$("planTitle").textContent + " · " + areaNames(), ""]
     .concat(current.flatMap(x => [
       ...(x.go ? [`          ↓ ${x.go.mode==="walk" ? "Walk "+x.go.min+" min" : x.go.mode==="ferry" ? "Staten Island Ferry, then "+x.go.train+" (~"+dur(r5(x.go.min))+")" : x.go.mode==="car" ? "Bus or ride-share (~"+dur(r5(x.go.min))+")" : "Take the "+x.go.train+" (~"+dur(r5(x.go.min))+")"}`] : []),
-      `${fmt(x.start).padStart(8)}  ${x.p.n} (${x.p.h}) · ${COST[x.p.c]} · about ${dur(x.stay)}\n          Tip: ${x.p.tip}`]))
+      `${fmt(x.start).padStart(8)}  ${x.p.n} (${x.p.h}) · ${COST[x.p.c]} · about ${dur(x.stay)}${x.checkin!=null ? ` · get there by ${fmt(x.checkin)}` : ""}\n          Tip: ${x.p.tip}`]))
     .concat(["","Open this plan: "+planURL(),"Planned with Day Sorted NYC"]).join("\n");
 }
 function updateRequest(){}   // the request form is filled in by the visitor
